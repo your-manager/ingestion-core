@@ -1,0 +1,30 @@
+{
+  "name": "ingestion-core",
+  "version": "1.0.0",
+  "description": "ingestion service",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-manager/ingestion-core.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/your-manager/ingestion-core/issues"
+  },
+  "homepage": "https://github.com/your-manager/ingestion-core#readme",
+  "dependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.0.8",
+    "axios": "^1.13.2",
+    "better-sqlite3": "^12.6.0",
+    "dotenv": "^17.2.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
