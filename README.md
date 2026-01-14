@@ -75,3 +75,18 @@ This service ingests Customers and Invoices from QuickBooks Online (QBO) into a 
 - **Webhooks**: Implement QBO Webhooks for real-time updates instead of polling.
 - **Multiple Entities**: Expand support to other QBO objects (Payments, Items, etc.).
 - **Better Error Handling**: Implement exponential backoff for API rate limits.
+
+### GUI Tools
+
+#### DBeaver
+1.  **Open DBeaver**.
+2.  Click on **"New Database Connection"** (plug icon) or go to **Database > New Database Connection**.
+3.  Select **SQLite** and click **Next**.
+4.  In the **"Path"** field, click **"Browse"** and navigate to the project folder.
+5.  Select the `qbo_ingestion.db` file.
+6.  Click **Finish**.
+7.  In the **Database Navigator**, expand the connection -> **Tables** to view `customers`, `invoices`, etc.
+
+#### Other Tools
+- **DB Browser for SQLite**: A high-quality, visual, open source tool.
+- **VS Code Extensions**: Extensions like "SQLite" or "SQLite Viewer".
