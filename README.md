@@ -55,6 +55,29 @@ This service ingests Customers and Invoices from QuickBooks Online (QBO) into a 
 
 ## Architecture
 
+```mermaid
+graph TD
+    User[User/CLI] -->|Starts| Main[Main Loop / Scheduler]
+    Main -->|Triggers (every 5m)| Ingestion[Ingestion Service]
+    
+    subgraph "Authentication"
+        Auth[Auth Service] <-->|Exchanges/Refreshes Tokens| QBO_Auth[QBO OAuth2]
+        Auth <-->|Reads/Writes Tokens| DB[(SQLite DB)]
+    end
+    
+    subgraph "Data Sync"
+        Ingestion -->|1. Get Sync State| DB
+        Ingestion -->|2. Fetch Updates| QBO_API[QBO API]
+        QBO_API -.->|Uses Access Token| Auth
+        Ingestion -->|3. Upsert Data| DB
+        Ingestion -->|4. Update Sync State| DB
+    end
+    
+    DB -->|Stores| Customers[Customers Table]
+    DB -->|Stores| Invoices[Invoices Table]
+    DB -->|Stores| SyncState[Sync State Table]
+```
+
 - **Database**: SQLite (`better-sqlite3`) is used for local storage.
   - `customers`: Stores raw Customer objects.
   - `invoices`: Stores raw Invoice objects.
