@@ -4,26 +4,27 @@ import { QboService } from './qbo';
 export class IngestionService {
   static async syncObject(realmId: string, objectType: 'Customer' | 'Invoice') {
     console.log(`Starting sync for ${objectType} (Realm: ${realmId})`);
-    
+
     try {
       // Get last sync state
       const syncState = this.getSyncState(realmId, objectType);
-      const lastSyncTime = syncState?.last_sync_timestamp;
+      const lastSuccessfulSync = syncState?.last_successful_sync;
 
-      // Fetch updates from QBO
-      const objects = await QboService.fetchObjects(realmId, objectType, lastSyncTime);
-      
+      // Fetch updates from QBO using the checkpoint timestamp
+      const objects = await QboService.fetchObjects(realmId, objectType, lastSuccessfulSync);
+
       if (objects.length === 0) {
         console.log(`No updates found for ${objectType} (Realm: ${realmId})`);
-        this.updateSyncState(realmId, objectType, lastSyncTime || null, 'success');
+        // No new data - update checkpoint to now to avoid re-querying same time range
+        this.updateSyncState(realmId, objectType, null, 'success');
         return;
       }
 
       console.log(`Found ${objects.length} updates for ${objectType} (Realm: ${realmId})`);
 
       // Persist objects
-      const tableName = objectType === 'Customer' ? 'customers' : 'invoices';
-      const insertStmt = objectType === 'Customer' 
+      const tableName = objectType === 'Customer' ? 'customers' : 'invoices'; // TODO: Use this variable in the below sql queries
+      const insertStmt = objectType === 'Customer'
         ? db.prepare(`
             INSERT INTO customers (id, realm_id, data, updated_at)
             VALUES (?, ?, ?, strftime('%s', 'now'))
@@ -54,12 +55,13 @@ export class IngestionService {
 
       // Update sync state with the latest timestamp from the fetched objects
       // QBO returns objects ordered by LastUpdatedTime, so the last object has the latest time
-      const latestTimestamp = objects[objects.length - 1].MetaData.LastUpdatedTime;
-      this.updateSyncState(realmId, objectType, latestTimestamp, 'success');
-      
+      const latestTimestamp = new Date(objects[objects.length - 1].MetaData.LastUpdatedTime).getTime() / 1000;
+      this.updateSyncState(realmId, objectType, Math.floor(latestTimestamp), 'success');
+
       console.log(`Successfully synced ${objects.length} ${objectType}s (Realm: ${realmId})`);
 
     } catch (error: any) {
+      // TODO: Ensure that in case of failures, mySQL transaction is rolled back and data is not persisted + 2 retries are configured
       console.error(`Sync failed for ${objectType} (Realm: ${realmId}):`, error.message);
       this.updateSyncState(realmId, objectType, null, 'failure', error.message);
     }
@@ -71,70 +73,42 @@ export class IngestionService {
   }
 
   private static updateSyncState(
-    realmId: string, 
-    objectType: string, 
-    lastSyncTimestamp: string | null, 
+    realmId: string,
+    objectType: string,
+    lastSyncTimestamp: number | null,
     status: 'success' | 'failure',
     errorMessage?: string
   ) {
     const now = Math.floor(Date.now() / 1000);
-    
-    // If failure, we don't update the last_sync_timestamp so we can retry from the same point
-    // If success, we update it. If lastSyncTimestamp is null (no new data), we keep the old one (handled by COALESCE in SQL or logic here)
-    
-    let query = `
-      INSERT INTO sync_state (realm_id, object_type, last_sync_timestamp, last_successful_sync, status, error_message)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(realm_id, object_type) DO UPDATE SET
-        status = excluded.status,
-        error_message = excluded.error_message
-    `;
 
-    if (status === 'success') {
-        query += `, last_successful_sync = excluded.last_successful_sync`;
-        if (lastSyncTimestamp) {
-            query += `, last_sync_timestamp = excluded.last_sync_timestamp`;
-        }
-    }
+    // Always update last_sync_attempt (on both success and failure)
+    // On success: always update last_successful_sync (even if no new data, use current time to advance checkpoint)
+    // On failure: preserve last_successful_sync for retry
 
-    const stmt = db.prepare(query);
-    stmt.run(
-      realmId, 
-      objectType, 
-      lastSyncTimestamp, 
-      status === 'success' ? now : null, // This value is only used if inserted, but for updates we handle logic above. Actually for insert we need correct values.
-      status, 
-      errorMessage || null
-    );
-    
-    // Correction: The ON CONFLICT logic above is a bit tricky with conditional updates. 
-    // Let's simplify: Read, Modify, Write is safer or just use specific upsert logic.
-    // But since we want to be robust, let's just do a proper UPSERT with logic.
-    
-    // Actually, let's rewrite the query to be simpler and handle the logic in the SQL or JS.
-    // If success: update timestamp and last_successful_sync.
-    // If failure: update status and error message only.
-    
     if (status === 'success') {
         const upsertSuccess = db.prepare(`
-            INSERT INTO sync_state (realm_id, object_type, last_sync_timestamp, last_successful_sync, status, error_message)
+            INSERT INTO sync_state (realm_id, object_type, last_successful_sync, last_sync_attempt, status, error_message)
             VALUES (?, ?, ?, ?, 'success', NULL)
             ON CONFLICT(realm_id, object_type) DO UPDATE SET
-              last_sync_timestamp = COALESCE(?, sync_state.last_sync_timestamp),
               last_successful_sync = ?,
+              last_sync_attempt = ?,
               status = 'success',
               error_message = NULL
         `);
-        upsertSuccess.run(realmId, objectType, lastSyncTimestamp, now, lastSyncTimestamp, now);
+        // Always update last_successful_sync on success
+        // Use lastSyncTimestamp if provided (new data found), otherwise use now (no new data, advance checkpoint)
+        const checkpoint = lastSyncTimestamp || now;
+        upsertSuccess.run(realmId, objectType, checkpoint, now, checkpoint, now);
     } else {
         const upsertFailure = db.prepare(`
-            INSERT INTO sync_state (realm_id, object_type, last_sync_timestamp, last_successful_sync, status, error_message)
-            VALUES (?, ?, NULL, NULL, 'failure', ?)
+            INSERT INTO sync_state (realm_id, object_type, last_successful_sync, last_sync_attempt, status, error_message)
+            VALUES (?, ?, NULL, ?, 'failure', ?)
             ON CONFLICT(realm_id, object_type) DO UPDATE SET
+              last_sync_attempt = ?,
               status = 'failure',
               error_message = ?
         `);
-        upsertFailure.run(realmId, objectType, errorMessage, errorMessage);
+        upsertFailure.run(realmId, objectType, now, errorMessage, now, errorMessage);
     }
   }
 }

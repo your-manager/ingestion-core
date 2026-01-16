@@ -13,15 +13,17 @@ export class QboService {
   static async fetchObjects(
     realmId: string,
     objectType: 'Customer' | 'Invoice',
-    lastSyncTime?: string
+    lastSyncTime?: number
   ): Promise<any[]> {
     const accessToken = await AuthService.getValidAccessToken(realmId);
     const baseUrl = this.getBaseUrl(realmId);
-    
+
     let query = `SELECT * FROM ${objectType}`;
     if (lastSyncTime) {
-      // QBO uses ISO 8601 format for timestamps
-      query += ` WHERE MetaData.LastUpdatedTime > '${lastSyncTime}'`;
+      // Convert Unix timestamp (seconds) to ISO 8601 format that QBO expects
+      const date = new Date(lastSyncTime * 1000); // Convert to milliseconds
+      const isoDate = date.toISOString();
+      query += ` WHERE MetaData.LastUpdatedTime > '${isoDate}'`;
     }
     // Order by LastUpdatedTime to ensure we process in order
     query += ` ORDERBY MetaData.LastUpdatedTime`;
@@ -58,7 +60,10 @@ export class QboService {
           startPosition += maxResults;
         }
       } catch (error: any) {
-        console.error(`Error fetching ${objectType} for realm ${realmId}:`, error.response?.data || error.message);
+        const errorDetails = error.response?.data || error.message;
+        console.error(`Error fetching ${objectType} for realm ${realmId}:`);
+        console.error('  Status:', error.response?.status);
+        console.error('  Details:', JSON.stringify(errorDetails, null, 2));
         throw error;
       }
     }
